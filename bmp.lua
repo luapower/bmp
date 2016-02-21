@@ -21,7 +21,7 @@ local core_header = ffi.typeof[[struct __attribute__((__packed__)) {
 	uint16_t w;
 	uint16_t h;
 	uint16_t planes;       // 1
-	uint16_t bpp;          // 1, 4, 8, 16, 24, 32; 64 (GDI+)
+	uint16_t bpp;          // 0, 1, 4, 8, 16, 24, 32; 64 (GDI+)
 }]]
 
 --BITMAPINFOHEADER, Windows NT, 3.1x or later
@@ -62,114 +62,142 @@ local v5_header = ffi.typeof([[struct __attribute__((__packed__)) {
 	uint32_t reserved;
 }]], v4_header)
 
+local valid_bpps = {
+	[0] = true,
+	[1] = true,
+	[4] = true,
+	[8] = true,
+	[16] = true,
+	[24] = true,
+	[32] = true,
+	[64] = true,
+}
+
 function M.load_header(read)
 	local h = file_header()
 	read(h, ffi.sizeof(h))
 	assert(ffi.string(h.magic, 2) == 'BM')
 	local z = h.header_size - 4
 	local pixels_offset = h.pixels_offset
-
+	local compression
 	if z == ffi.sizeof(core_header) then
 		h = core_header()
 		read(h, z)
 	elseif z == ffi.sizeof(info_header) then
 		h = info_header()
 		read(h, z)
+		compression = h.compression
 		if h.compression == 3 then --BI_BITFIELDS
 			--bit field masks
 		end
 	elseif z == ffi.sizeof(v4_header) then
 		h = v4_header()
+		compression = h.compression
 		read(h, z)
 	elseif z == ffi.sizeof(v5_header) then
 		h = v5_header()
+		compression = h.compression
 		read(h, z)
+	elseif z == 64 + 4 then
+		error'OS22XBITMAPHEADER NYI'
+	elseif z == 52 + 4 then
+		error'BITMAPV2INFOHEADER NYI'
+	elseif z == 56 + 4 then
+		error'BITMAPV3INFOHEADER NYI'
 	else
 		error('invalid info header size '..(z+4))
 	end
-	return h, pixels_offset
+	assert(h.planes == 1, 'invalid number of planes')
+	assert(valid_bpps[h.bpp], 'invalid bpp')
+	assert(h.w >= 1, 'invalid width')
+	assert(math.abs(h.h) >= 1, 'invalid height')
+	local bmp = {}
+	bmp.compression = compression
+	bmp.pixels_offset = pixels_offset
+	bmp.seek_to_pixels = pixels_offset - ffi.sizeof(file_header) - z
+	bmp.bpp = h.bpp
+	bmp.bottom_up = h.h >= 0
+	bmp.w = h.w
+	bmp.h = math.abs(h.h)
+	bmp.stride = math.floor((h.bpp * h.w + 31) / 32) * 4
+	return bmp
 end
 
-function M.load(read, write)
-	local h, pixels_offset = M.load_header(read)
-	read(nil, pixels_offset)
-	local stride = (h.bpp * h.w + 31) / 32 * 4
-	local buf = ffi.new('uint8_t*', stride)
-	for i = 0, math.abs(h.h)-1 do
-		read(buf, stride)
-		write(buf, stride)
+function M.decoder(bmp)
+	local c = bmp.compression
+	local bpp = bmp.bpp
+	if not c or c == 0 then --BI_RGB
+		local dstride = nil --means: use sbuf
+		return dstride, function(sbuf, dbuf) end --noop
+	elseif c == 1 then --BI_RLE8
+		assert(bpp == 8, 'invalid bpp')
+		error'RLE8 NYI'
+		local dstride = h.w * 4
+		return dstride, function(sbuf, dbuf)
+		end
+	elseif c == 2 then --BI_RLE4
+		error'RLE4 NYI'
+		assert(bpp == 4, 'invalid bpp')
+		local dstride = h.w * 4
+		return dstride, function(sbuf, dbuf)
+		end
+	elseif c == 3 then --BI_BITFIELDS
+		local dstride = nil
+		error'BITFIELDS NYI'
+		return dstride, function(buf, sz)
+		end
+	elseif c == 4 then --BI_JPEG
+		error'jpeg NYI'
+	elseif c == 5 then --BI_PNG
+		error'png NYI'
+	elseif c == 6 then --BI_ALPHABITFIELDS: Windows CE 5.0 with .NET 4.0 or later
+		local dstride = nil
+		return dstride, function(buf, sz)
+		end
+	else
+		error('invalid compression method '..c)
 	end
 end
 
-function M.as_bitmap(read)
-	local h, pixels_offset = M.load_header(read)
-	read(nil, pixels_offset)
-	local stride = (h.bpp * h.w + 31) / 32 * 4
-	local size = stride * math.abs(h.h)
-	local data = ffi.new('uint8_t[?]', size)
-	--read(data, size)
+function M.alloc(size)
+	return ffi.new('uint8_t[?]', size)
+end
+
+function M.load(bmp, read, write, alloc)
+	alloc = alloc or M.alloc
+	read(nil, bmp.seek_to_pixels)
+	local dstride, decode = M.decoder(bmp)
+	local sbuf = alloc(bmp.stride)
+	local dbuf = dstride and alloc(dstride) or sbuf
+	for i = 0, bmp.h-1 do
+		read(sbuf, bmp.stride)
+		decode(sbuf, dbuf)
+		write(dbuf, dstride)
+	end
+end
+
+function M.as_bitmap(read, alloc)
+	alloc = alloc or M.alloc
+	local bmp = M.load_header(read)
+	local dstride = M.decoder(bmp)
+	local stride = dstride or bmp.stride
+	local size = stride * bmp.h
+	local data = alloc(stride)
+	local format = nil --format
+	local function write(dbuf, dstride)
+		--
+	end
+	M.load(bmp, read, write, alloc)
 	return {
 		data = data,
 		size = size,
-		format = h.bpp,
+		format = format,
 		stride = stride,
-		w = h.w,
-		h = math.abs(h.h),
-		bottom_up = h.h > 0,
+		w = bmp.w,
+		h = bmp.h,
+		bottom_up = bmp.bottom_up,
 	}
 end
-
---[=[
-
-
---parse a 16-bit WORD from the binary string
-local function word(s, offset)
-	local lo = s:byte(offset)
-	local hi = s:byte(offset + 1)
-	return hi*256 + lo
-end
-
---parse a 32-bit DWORD from the binary string
-local function dword(s, offset)
-	local lo = word(s, offset)
-	local hi = word(s, offset + 2)
-	return hi*65536 + lo
-end
-
-local function parse_header(block) --34 bytes needed
-	-- BITMAPFILEHEADER (14 bytes long)
-	assert(word(header, 1) == 0x4D42, 'not a BMP file')
-	local bits_offset = word(header, offset + 10)
-	-- BITMAPINFOHEADER
-	offset = 15 -- start from the 15-th byte
-	local width       = dword(header, offset + 4)
-	local height      = dword(header, offset + 8)
-	local bpp         =  word(header, offset + 14) --1, 2, 4, 8, 16, 24, 32
-	local compression = dword(header, offset + 16) --0 = none, 1 = RLE-8, 2 = RLE-4, 3 = Huffman, 4 = JPEG/RLE-24, 5 = PNG
-end
-
--- Parse the bits of an open BMP file
-parse = function(file, bits, chunk, r, g, b)
-	r = r or {}
-	g = g or {}
-	b = b or {}
-	local bpp = bits/8
-	local bytes = file:read(chunk*bpp) -- todo: "*a"
-	if bytes == nil then
-		-- end of file
-		file:close()
-		return
-	end
-	for i = 0, chunk - 1 do
-		local o = i*bpp
-		insert(r, byte(bytes, o + 3))
-		insert(g, byte(bytes, o + 2))
-		insert(b, byte(bytes, o + 1))
-	end
-	return r, g, b
-end
-]=]
-
 
 
 if not ... then
@@ -180,23 +208,26 @@ if not ... then
 
 	local function test(f)
 		local s = glue.readfile(f)
-		print(f)
-		local b = bmp.as_bitmap(function(buf, size)
+		assert(#s > 0)
+		print('> '..f, #s)
+		local function read(buf, size)
+			assert(#s >= size, 'file too short')
 			local s1 = s:sub(1, size)
-			if s1 == '' then return end
-			s = s:sub(size+1)
+			s = s:sub(size + 1)
 			if buf then
-				ffi.copy(buf, s1)
+				ffi.copy(buf, s1, size)
 			end
 			return #s1
-		end)
-		print(b.format, b.w, b.h, b.bottom_up)
+		end
+		local b = bmp.as_bitmap(read, glue.malloc)
+		--print('conclusion', b.format, b.w, b.h, b.bottom_up)
 	end
 
 	for i,d in ipairs{'good', 'bad', 'questionable'} do
 		for f in lfs.dir('media/bmp/'..d) do
 			if f:find'%.bmp$' then
-				test('media/bmp/'..d..'/'..f)
+				local ok, err = pcall(test, 'media/bmp/'..d..'/'..f)
+				if not ok then print(err) end
 			end
 		end
 	end

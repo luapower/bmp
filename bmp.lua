@@ -125,8 +125,10 @@ function M.open(read_bytes)
 	local h
 	local core --the ancient core header is more restricted
 	local quad_mask = true --the bitfields mask can be a rgb quad or a triple
+	local quad_pal = true --palette entries are quads except for core header
 	if z == ffi.sizeof(core_header) then
 		core = true
+		quad_pal = false
 		h = read(core_header())
 	elseif z == ffi.sizeof(info_header) then
 		quad_mask = false
@@ -173,7 +175,7 @@ function M.open(read_bytes)
 
 	--make a palette loader and indexer
 	local pal_size = fh.image_offset - bytes_read
-	local pal_entry_ct = rgb_quad
+	local pal_entry_ct = quad_pal and rgb_quad or rgb_triple
 	local pal_ct = ffi.typeof('$[?]', pal_entry_ct)
 	local pal_count = 0
 	if bpp <= 8 then
@@ -193,7 +195,7 @@ function M.open(read_bytes)
 	end
 	local function pal_entry(i)
 		assert(i < pal_count, 'palette index out of range')
-		return pal[i].r, pal[i].g, pal[i].b, pal[i].a
+		return pal[i].r, pal[i].g, pal[i].b, 0xff
 	end
 
 	--make a progressive (row-by-row) loader
@@ -256,14 +258,13 @@ function M.open(read_bytes)
 						read(rle_buf, 2)
 						local n = rle_buf[0]
 						local k = rle_buf[1]
-						print(n, k)
 						if n == 0 then --escape
 							if k == 0 then --eol
 								assert(i == width, 'RLE EOL too soon')
 								j = j + 1
 								break
 							elseif k == 1 then --eof
-								assert(j == height, 'RLE EOF too soon')
+								assert(j == height-1, 'RLE EOF too soon')
 								break
 							elseif k == 2 then --delta
 								read(rle_buf, 2)
@@ -274,6 +275,11 @@ function M.open(read_bytes)
 							else --absolute mode: k = number of pixels to read
 								assert(i + k <= width, 'RLE overflow')
 								read(row_bmp.data + i, k)
+								--read the word-align padding
+								local k2 = bit.band(k + 1, bit.bnot(1)) - k
+								if k2 > 0 then
+									read(nil, k2)
+								end
 								i = i + k
 							end
 						else --repeat: n = number of pixels to repeat, k = color

@@ -2,10 +2,16 @@
 --BMP file load/save.
 --Written by Cosmin Apreutesei. Public Domain.
 
+--TODO: RLE4
+--TOOD: saving BI_RGB (rgb555, bgr8, bgrx8, bgrx16), and BI_BITFIELDS bgra8
+--TODO: demo
+--TODO: docs
+
 local ffi = require'ffi'
 local bit = require'bit'
 local bitmap = require'bitmap'
 local glue = require'glue'
+
 local M = {}
 
 --BITMAPFILEHEADER
@@ -116,7 +122,7 @@ function M.open(read_bytes)
 	--load the DIB header
 	local z = fh.header_size - 4
 	local core --the ancient core header is more restricted
-	local quad_mask = true --the bitfields mask can be a rgb quad or a triple
+	local alpha_mask = true --bitfields can contain a mask for alpha or not
 	local quad_pal = true --palette entries are quads except for core header
 	local h
 	if z == ffi.sizeof(core_header) then
@@ -124,10 +130,10 @@ function M.open(read_bytes)
 		quad_pal = false
 		h = read(core_header())
 	elseif z == ffi.sizeof(info_header) then
-		quad_mask = false
+		alpha_mask = false --...unless comp == 'alphabitfields', see below
 		h = read(info_header())
 	elseif z == ffi.sizeof(v2_header) then
-		quad_mask = false
+		alpha_mask = false
 		h = read(v2_header())
 	elseif z == ffi.sizeof(v3_header) then
 		h = read(v3_header())
@@ -145,6 +151,7 @@ function M.open(read_bytes)
 	assert(h.planes == 1, 'invalid number of planes')
 	local comp = core and 0 or h.compression
 	local comp = assert(compressions[comp], 'invalid compression type')
+	alpha_mask = alpha_mask or comp == 'alphabitfields' --Windows CE
 	local bpp = h.bpp
 	assert(valid_bpps[comp][bpp], 'invalid bpp')
 	local rle = comp:find'^rle'
@@ -157,10 +164,11 @@ function M.open(read_bytes)
 	assert(height >= 1, 'invalid height')
 
 	--load the channel masks for bitfield bitmaps
-	local bitmasks
+	local bitmasks, has_alpha
 	if bitfields then
 		bitmasks = ffi.new('uint32_t[?]', 4)
-		read(bitmasks, (quad_mask and 4 or 3) * 4)
+		read(bitmasks, (alpha_mask and 4 or 3) * 4)
+		has_alpha = bitmasks[3] > 0
 	end
 
 	--make a palette loader and indexer
@@ -247,6 +255,7 @@ function M.open(read_bytes)
 				if not bitmap.formats[format] then
 					format = 'raw'..bpp
 					dst_colorspace = 'rgba8'
+					local band, shr = bit.band, bit.rshift
 					local r_and = bitmasks[0]
 					local r_shr = mask_shr_bits(r_and)
 					local g_and = bitmasks[1]
@@ -255,13 +264,12 @@ function M.open(read_bytes)
 					local b_shr = mask_shr_bits(b_and)
 					local a_and = bitmasks[3]
 					local a_shr = mask_shr_bits(a_and)
-					local band, shr = bit.band, bit.rshift
 					function convert_pixel(x)
 						return
 							shr(band(x, r_and), r_shr),
 							shr(band(x, g_and), g_shr),
 							shr(band(x, b_and), b_shr),
-							shr(band(x, a_and), a_shr)
+							has_alpha and shr(band(x, a_and), a_shr) or 0xff
 					end
 				end
 

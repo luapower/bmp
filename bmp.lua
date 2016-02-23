@@ -4,6 +4,8 @@
 
 local ffi = require'ffi'
 local bit = require'bit'
+local bitmap = require'bitmap'
+local glue = require'glue'
 local M = {}
 
 --BITMAPFILEHEADER
@@ -83,27 +85,18 @@ local rgb_quad = ffi.typeof([[struct __attribute__((__packed__)) {
 	uint8_t a;
 }]], rgb_triple)
 
-local valid_bpps_core = {
-	[ 1] = true,
-	[ 4] = true,
-	[ 8] = true,
-	[16] = true,
-	[24] = true,
-}
-
-local valid_bpps_info = {
-	[ 1] = true,
-	[ 4] = true,
-	[ 8] = true,
-	[16] = true,
-	[24] = true,
-	[ 0] = true, --JPEG, PNG
-	[32] = true,
-	[64] = true, --GDI+
-}
-
 local compressions = {[0] = 'rgb', 'rle8', 'rle4', 'bitfields',
 	'jpeg', 'png', 'alphabitfields'}
+
+local valid_bpps = {
+	rgb = glue.index{1, 2, 4, 8, 16, 24, 32, 64},
+	rle4 = glue.index{4},
+	rle8 = glue.index{8},
+	bitfields = glue.index{16, 32},
+	alphabitfields = glue.index{16, 32},
+	jpeg = glue.index{0},
+	png = glue.index{0},
+}
 
 function M.open(read_bytes)
 
@@ -122,10 +115,10 @@ function M.open(read_bytes)
 
 	--load the DIB header
 	local z = fh.header_size - 4
-	local h
 	local core --the ancient core header is more restricted
 	local quad_mask = true --the bitfields mask can be a rgb quad or a triple
 	local quad_pal = true --palette entries are quads except for core header
+	local h
 	if z == ffi.sizeof(core_header) then
 		core = true
 		quad_pal = false
@@ -150,50 +143,49 @@ function M.open(read_bytes)
 
 	--validate it and extract info from it
 	assert(h.planes == 1, 'invalid number of planes')
-	local bpp = h.bpp
-	local valid_bpps = core and valid_bpps_core or valid_bpps_info
-	assert(valid_bpps[bpp], 'invalid bpp')
 	local comp = core and 0 or h.compression
 	local comp = assert(compressions[comp], 'invalid compression type')
-	if comp == 'rle4' then assert(bpp == 4, 'invalid bpp') end
-	if comp == 'rle8' then assert(bpp == 8, 'invalid bpp') end
+	local bpp = h.bpp
+	assert(valid_bpps[comp][bpp], 'invalid bpp')
+	local rle = comp:find'^rle'
+	local bitfields = comp:find'bitfields$'
+	local palettized = bpp >=1 and bpp <= 8
 	local width = h.w
 	local height = math.abs(h.h)
 	local bottom_up = h.h > 0
 	assert(width >= 1, 'invalid width')
 	assert(height >= 1, 'invalid height')
 
-	--load the channel masks for BI_BITFIELDS bitmaps
-	local mask_r, mask_g, mask_b, mask_a
-	if comp == 'bitfields' then
-		local mask = read(quad_mask and rgb_quad() or rgb_triple())
-		mask_r = mask.r
-		mask_g = mask.g
-		mask_b = mask.b
-		mask_a = quad_mask and mask.a or nil
+	--load the channel masks for bitfield bitmaps
+	local bitmasks
+	if bitfields then
+		bitmasks = ffi.new('uint32_t[?]', 4)
+		read(bitmasks, (quad_mask and 4 or 3) * 4)
 	end
 
 	--make a palette loader and indexer
-	local pal_size = fh.image_offset - bytes_read
-	local pal_entry_ct = quad_pal and rgb_quad or rgb_triple
-	local pal_ct = ffi.typeof('$[?]', pal_entry_ct)
+	local function noop() end
+	local load_pal = noop
 	local pal_count = 0
-	if bpp <= 8 then
+	local pal
+	if palettized then
+		local pal_size = fh.image_offset - bytes_read
+		local pal_entry_ct = quad_pal and rgb_quad or rgb_triple
+		local pal_ct = ffi.typeof('$[?]', pal_entry_ct)
 		pal_count = math.floor(pal_size / ffi.sizeof(pal_entry_ct))
 		pal_count = math.min(pal_count, 2^bpp)
-	end
-	local pal
-	local function load_pal()
-		if pal then return end
-		if pal_count > 0 then
-			pal = read(pal_ct(pal_count))
-			read(nil, pal_size - ffi.sizeof(pal)) --null-read to pixel data
-		else
-			pal = true
-			read(nil, pal_size) --null-read to pixel data
+		function load_pal()
+			if pal_count > 0 then
+				pal = read(pal_ct(pal_count))
+				read(nil, pal_size - ffi.sizeof(pal)) --null-read to pixel data
+			else
+				read(nil, pal_size) --null-read to pixel data
+			end
+			load_pal = noop
 		end
 	end
 	local function pal_entry(i)
+		load_pal()
 		assert(i < pal_count, 'palette index out of range')
 		return pal[i].r, pal[i].g, pal[i].b, 0xff
 	end
@@ -206,25 +198,77 @@ function M.open(read_bytes)
 		error'png not supported'
 	else
 		function load(_, dst_bmp, dst_x, dst_y)
-			local bitmap = require'bitmap'
 
-			--allocate a single-row bitmap in the original format.
-			local bitmap_formats = {
-				--paletted, using custom pixel converter
-				[1] = 'g1',
-				[4] = 'g4',
-				[8] = 'g8',
-				--non-paletted, using built-in converters
-				[16] = 'rgb555',
-				[24] = 'bgr8',
-				[32] = 'bgrx8',
-				[64] = 'bgrx16',
-			}
-			local row_bmp = bitmap.new(width, 1, bitmap_formats[bpp], bottom_up, true)
+			--decide on the row bitmap format and if needed make a pixel converter
+			local format, convert_pixel, src_colorspace, dst_colorspace
+			if bitfields then --packed, standard or custom format
 
-			--ga8 -> rgba8 pixel converters for paletted bitmaps.
-			local convert_pixel
-			if bpp <= 8 then
+				--compute the shift distance and the number of bits for each mask
+				local function mask_shr_bits(mask)
+					if mask == 0 then
+						return 0, 0
+					end
+					local shr = 0
+					while bit.band(mask, 1) == 0 do --lowest bit not reached yet
+						mask = bit.rshift(mask, 1)
+						shr = shr + 1
+					end
+					local bits = 0
+					while mask > 0 do --highest bit not cleared yet
+						mask = bit.rshift(mask, 1)
+						bits = bits + 1
+					end
+					return shr, bits
+				end
+
+				--build a standard format name based on the bitfield masks
+				local t = {} --{shr1, ...}
+				local tc = {} --{shr -> color}
+				local tb = {} --{shr -> bits}
+				for ci, color in ipairs{'r', 'g', 'b', 'a'} do
+					local shr, bits = mask_shr_bits(bitmasks[ci-1])
+					if bits > 0 then
+						t[#t+1] = shr
+						tc[shr] = color
+						tb[shr] = bits
+					end
+				end
+				table.sort(t, function(a, b) return a > b end)
+				local tc2, tb2 = {}, {}
+				for i,shr in ipairs(t) do
+					tc2[i] = tc[shr]
+					tb2[i] = tb[shr]
+				end
+				format = table.concat(tc2)..table.concat(tb2)
+				format = format:gsub('([^%d])8?888$', '%18')
+
+				--make a custom pixel converter if the bitfields do not represent
+				--a standard format implemented in the `bitmap` module.
+				if not bitmap.formats[format] then
+					format = 'raw'..bpp
+					dst_colorspace = 'rgba8'
+					local r_and = bitmasks[0]
+					local r_shr = mask_shr_bits(r_and)
+					local g_and = bitmasks[1]
+					local g_shr = mask_shr_bits(g_and)
+					local b_and = bitmasks[2]
+					local b_shr = mask_shr_bits(b_and)
+					local a_and = bitmasks[3]
+					local a_shr = mask_shr_bits(a_and)
+					local band, shr = bit.band, bit.rshift
+					function convert_pixel(x)
+						return
+							shr(band(x, r_and), r_shr),
+							shr(band(x, g_and), g_shr),
+							shr(band(x, b_and), b_shr),
+							shr(band(x, a_and), a_shr)
+					end
+				end
+
+			elseif bpp <= 8 then --palettized, using custom converter
+
+				format = 'g'..bpp --using gray<1,2,4,8> as the base format
+				dst_colorspace = 'rgba8'
 				local shr = bit.rshift
 				if bpp == 1 then
 					function convert_pixel(g8)
@@ -236,20 +280,33 @@ function M.open(read_bytes)
 					end
 				elseif bpp == 8 then
 					convert_pixel = pal_entry
+				else
+					assert(false)
 				end
+
+			else --packed, standard format
+
+				local formats = {
+					[16] = 'rgb555',
+					[24] = 'bgr8',
+					[32] = 'bgrx8',
+					[64] = 'bgrx16',
+				}
+				format = assert(formats[bpp])
+
 			end
+
+			--allocate a single-row bitmap in the original format.
+			local row_bmp = bitmap.new(width, 1, format, bottom_up, true)
 
 			--check bitmap stride against the known stride formula.
 			local src_stride = math.floor((bpp * width + 31) / 32) * 4
 			assert(row_bmp.stride == src_stride)
 
-			local rle = comp:find'^rle'
-			local bitfields = comp:find'bitfields$'
-
 			--row reader: either straight read or RLE decode
 			local read_row
 			if rle then
-				assert(bpp == 8, 'RLE4 not supported')
+				assert(bpp == 8, 'RLE4 not supported') --TODO
 				local rle_buf = ffi.new'uint8_t[2]'
 				local j = 0
 				function read_row()
@@ -299,7 +356,8 @@ function M.open(read_bytes)
 			local dst_y = dst_y or 0
 			local function load_row(j)
 				read_row()
-				bitmap.paint(row_bmp, dst_bmp, dst_x, dst_y + j, convert_pixel, 'ga8', 'rgba8')
+				bitmap.paint(row_bmp, dst_bmp, dst_x, dst_y + j,
+					convert_pixel, src_colorspace, dst_colorspace)
 			end
 
 			load_pal()
@@ -314,14 +372,11 @@ function M.open(read_bytes)
 				end
 			end
 		end
+
 	end
 
 	--gather everything in a bmp object
 	local bmp = {}
-	bmp.mask_r = mask_r
-	bmp.mask_g = mask_g
-	bmp.mask_b = mask_b
-	bmp.mask_a = mask_a
 	bmp.compression = comp
 	bmp.image_offset = fh.image_offset
 	bmp.seek_to_image = fh.image_offset - ffi.sizeof(fh) - z
@@ -339,13 +394,31 @@ function M.open(read_bytes)
 	end
 
 	function bmp.palette:entry(i)
-		load_pal()
 		return pal_entry(i)
 	end
 
 	bmp.load = load
 
 	return bmp
+end
+
+local header_cts = {
+	core = core_header,
+	info = info_header,
+	v2 = v2_header,
+	v3 = v3_header,
+	v4 = v4_header,
+	v5 = v5_header,
+}
+function M.save(bmp, write, header_format, bottom_up)
+	local h_fmt = header_format or 'info'
+	local h_ct = assert(header_cts[h_fmt], 'invalid header format')
+	bottom_up = bottom_up
+	local h = h_ct()
+	h.w = bmp.w
+	h.h = (bottom_up and 1 or -1) * bmp.h
+
+	write(h, ffi.sizeof(h))
 end
 
 

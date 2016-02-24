@@ -4,8 +4,10 @@
 
 --TODO: RLE4
 --TOOD: saving BI_RGB (rgb555, bgr8, bgrx8, bgrx16), and BI_BITFIELDS bgra8
---TODO: demo
+--TODO: saving demo
 --TODO: docs
+
+if not ... then require'bmp_test'; return end
 
 local ffi = require'ffi'
 local bit = require'bit'
@@ -172,24 +174,28 @@ function M.open(read_bytes)
 	end
 
 	--make a palette loader and indexer
+	local pal_size = fh.image_offset - bytes_read
+	assert(pal_size >= 0, 'invalid image offset')
+	local load_pal
 	local function noop() end
-	local load_pal = noop
+	local function skip_pal()
+		read(nil, pal_size) --null-read to pixel data
+		load_pal = noop
+	end
+	load_pal = skip_pal
 	local pal_count = 0
 	local pal
 	if palettized then
-		local pal_size = fh.image_offset - bytes_read
 		local pal_entry_ct = quad_pal and rgb_quad or rgb_triple
 		local pal_ct = ffi.typeof('$[?]', pal_entry_ct)
 		pal_count = math.floor(pal_size / ffi.sizeof(pal_entry_ct))
 		pal_count = math.min(pal_count, 2^bpp)
-		function load_pal()
-			if pal_count > 0 then
+		if pal_count > 0 then
+			function load_pal()
 				pal = read(pal_ct(pal_count))
 				read(nil, pal_size - ffi.sizeof(pal)) --null-read to pixel data
-			else
-				read(nil, pal_size) --null-read to pixel data
+				load_pal = noop
 			end
-			load_pal = noop
 		end
 	end
 	local function pal_entry(i)
@@ -282,6 +288,10 @@ function M.open(read_bytes)
 					function convert_pixel(g8)
 						return pal_entry(shr(g8, 7))
 					end
+				elseif bpp == 2 then
+					function convert_pixel(g8)
+						return pal_entry(shr(g8, 6))
+					end
 				elseif bpp == 4 then
 					function convert_pixel(g8)
 						return pal_entry(shr(g8, 4))
@@ -295,7 +305,7 @@ function M.open(read_bytes)
 			else --packed, standard format
 
 				local formats = {
-					[16] = 'rgb555',
+					[16] = 'rgb0555',
 					[24] = 'bgr8',
 					[32] = 'bgrx8',
 					[64] = 'bgrx16',
@@ -428,42 +438,5 @@ function M.save(bmp, write, header_format, bottom_up)
 
 	write(h, ffi.sizeof(h))
 end
-
-
-if not ... then
-
-	local lfs = require'lfs'
-	local glue = require'glue'
-	local bitmap = require'bitmap'
-	local bmp = M
-
-	local function test(f)
-		local s = glue.readfile(f)
-		assert(#s > 0)
-		print('> '..f, #s)
-		local function read(buf, size)
-			assert(#s >= size, 'file too short')
-			if buf then
-				local s1 = s:sub(1, size)
-				ffi.copy(buf, s1, size)
-			end
-			s = s:sub(size + 1)
-		end
-		local bmp = bmp.open(read)
-		local dbmp = bitmap.new(bmp.w, bmp.h, 'bgra8')
-		bmp:load(dbmp)
-	end
-
-	for i,d in ipairs{'good'} do--, 'bad', 'questionable'} do
-		for f in lfs.dir('media/bmp/'..d) do
-			if f:find'%.bmp$' then
-				local ok, err = xpcall(test, debug.traceback, 'media/bmp/'..d..'/'..f)
-				if not ok then print(err) end
-			end
-		end
-	end
-
-end
-
 
 return M

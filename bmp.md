@@ -1,6 +1,8 @@
 ---
-tagline: BMP file encoding and decoding
+tagline: BMP file loading and saving
 ---
+
+<warn>Work in progress</warn>
 
 ## `local bmp = require'bmp'`
 

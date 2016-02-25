@@ -41,12 +41,12 @@ function win:repaint()
 			if not ok then
 				print(f, err)
 			else
+				--save a copy of the bitmap so we test the saving API too
 				local f1 = io.open(f:gsub('%.bmp', '-saved.bmp'), 'w')
 				local function write(buf, sz)
 					assert(stdio.write(f1, buf, sz))
 				end
 				local bmp_cut = bitmap.sub(wbmp, x, y, bmp.w, bmp.h)
-				--bitmap.paint(bmp_cut, wbmp, x, y + 650)
 				bmp_format.save(bmp_cut, write)
 				f1:close()
 

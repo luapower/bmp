@@ -3,11 +3,9 @@
 --Written by Cosmin Apreutesei. Public Domain.
 
 --TODO: RLE4
---TOOD: saving BI_RGB (rgb555, bgr8, bgrx8, bgrx16), and BI_BITFIELDS bgra8
---TODO: saving demo
 --TODO: docs
 
-if not ... then require'bmp_test'; return end
+if not ... then require'bmp_demo'; return end
 
 local ffi = require'ffi'
 local bit = require'bit'

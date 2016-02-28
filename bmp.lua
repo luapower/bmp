@@ -227,17 +227,17 @@ function M.open(read_bytes)
 				if mask == 0 then
 					return 0, 0
 				end
-				local shr = 0
+				local shift = 0
 				while band(mask, 1) == 0 do --lowest bit not reached yet
 					mask = shr(mask, 1)
-					shr = shr + 1
+					shift = shift + 1
 				end
 				local bits = 0
 				while mask > 0 do --highest bit not cleared yet
 					mask = shr(mask, 1)
 					bits = bits + 1
 				end
-				return shr, bits
+				return shift, bits
 			end
 
 			--build a standard format name based on the bitfield masks
@@ -327,11 +327,14 @@ function M.open(read_bytes)
 		--row reader: either straight read or RLE decode
 		local read_row
 		if rle then
-			local rle_buf = ffi.new'uint8_t[2]'
-			local j = 0
-			local p = ffi.cast('uint8_t*', row_bmp.data)
+
 			local read_pixels, fill_pixels
+
+			local rle_buf = ffi.new'uint8_t[2]'
+			local p = ffi.cast('uint8_t*', row_bmp.data)
+
 			if bpp == 8 then --RLE8
+
 				function read_pixels(i, n)
 					read(p + i, n)
 					--read the word-align padding
@@ -340,10 +343,13 @@ function M.open(read_bytes)
 						read(nil, n2)
 					end
 				end
+
 				function fill_pixels(i, n, v)
 					ffi.fill(p + i, n, v)
 				end
+
 			elseif bpp == 4 then --RLE4
+
 				local function shift_back(i, n) --shift data back one nibble
 					local i0 = math.floor(i)
 					if i0 == i then return end --no need for shifting
@@ -352,6 +358,7 @@ function M.open(read_bytes)
 						p[i] = bor(shl(p[i], 4), shr(p[i+1], 4))
 					end
 				end
+
 				function read_pixels(i, n)
 					local i = i * 0.5
 					local n = math.ceil(n * 0.5)
@@ -363,15 +370,19 @@ function M.open(read_bytes)
 						read(nil, n2)
 					end
 				end
+
 				function fill_pixels(i, n, v)
 					local i = i * 0.5
 					local n = math.ceil(n * 0.5)
 					ffi.fill(p + math.ceil(i), n, v)
 					shift_back(i, n)
 				end
+
 			else
 				assert(false)
 			end
+
+			local j = 0
 			function read_row()
 				local i = 0
 				while true do
@@ -404,6 +415,7 @@ function M.open(read_bytes)
 					end
 				end
 			end
+
 		else
 			function read_row()
 				read(row_bmp.data, row_bmp.stride)

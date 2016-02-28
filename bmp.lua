@@ -2,15 +2,14 @@
 --BMP file load/save.
 --Written by Cosmin Apreutesei. Public Domain.
 
---TODO: RLE4
---TODO: docs
-
 if not ... then require'bmp_demo'; return end
 
 local ffi = require'ffi'
 local bit = require'bit'
 local bitmap = require'bitmap'
 local glue = require'glue'
+local shr, shl, bor, band, bnot =
+	bit.rshift, bit.lshift, bit.bor, bit.band, bit.bnot
 
 local M = {}
 
@@ -229,13 +228,13 @@ function M.open(read_bytes)
 					return 0, 0
 				end
 				local shr = 0
-				while bit.band(mask, 1) == 0 do --lowest bit not reached yet
-					mask = bit.rshift(mask, 1)
+				while band(mask, 1) == 0 do --lowest bit not reached yet
+					mask = shr(mask, 1)
 					shr = shr + 1
 				end
 				local bits = 0
 				while mask > 0 do --highest bit not cleared yet
-					mask = bit.rshift(mask, 1)
+					mask = shr(mask, 1)
 					bits = bits + 1
 				end
 				return shr, bits
@@ -267,7 +266,6 @@ function M.open(read_bytes)
 			if not bitmap.formats[format] then
 				format = 'raw'..bpp
 				dst_colorspace = 'rgba8'
-				local band, shr = bit.band, bit.rshift
 				local r_and = bitmasks[0]
 				local r_shr = mask_shr_bits(r_and)
 				local g_and = bitmasks[1]
@@ -289,7 +287,6 @@ function M.open(read_bytes)
 
 			format = 'g'..bpp --using gray<1,2,4,8> as the base format
 			dst_colorspace = 'rgba8'
-			local shr = bit.rshift
 			if bpp == 1 then
 				function convert_pixel(g8)
 					return pal_entry(shr(g8, 7))
@@ -330,9 +327,51 @@ function M.open(read_bytes)
 		--row reader: either straight read or RLE decode
 		local read_row
 		if rle then
-			assert(bpp == 8, 'RLE4 not supported') --TODO
 			local rle_buf = ffi.new'uint8_t[2]'
 			local j = 0
+			local p = ffi.cast('uint8_t*', row_bmp.data)
+			local read_pixels, fill_pixels
+			if bpp == 8 then --RLE8
+				function read_pixels(i, n)
+					read(p + i, n)
+					--read the word-align padding
+					local n2 = band(n + 1, bnot(1)) - n
+					if n2 > 0 then
+						read(nil, n2)
+					end
+				end
+				function fill_pixels(i, n, v)
+					ffi.fill(p + i, n, v)
+				end
+			elseif bpp == 4 then --RLE4
+				local function shift_back(i, n) --shift data back one nibble
+					local i0 = math.floor(i)
+					if i0 == i then return end --no need for shifting
+					p[i0] = bor(band(p[i0], 0xf0), shr(p[i0+1], 4)) --stitch the first nibble
+					for i = math.ceil(i), i0 + n do
+						p[i] = bor(shl(p[i], 4), shr(p[i+1], 4))
+					end
+				end
+				function read_pixels(i, n)
+					local i = i * 0.5
+					local n = math.ceil(n * 0.5)
+					read(p + math.ceil(i), n)
+					shift_back(i, n)
+					--read the word-align padding
+					local n2 = band(n + 1, bnot(1)) - n
+					if n2 > 0 then
+						read(nil, n2)
+					end
+				end
+				function fill_pixels(i, n, v)
+					local i = i * 0.5
+					local n = math.ceil(n * 0.5)
+					ffi.fill(p + math.ceil(i), n, v)
+					shift_back(i, n)
+				end
+			else
+				assert(false)
+			end
 			function read_row()
 				local i = 0
 				while true do
@@ -355,17 +394,12 @@ function M.open(read_bytes)
 							error'RLE delta not supported'
 						else --absolute mode: k = number of pixels to read
 							assert(i + k <= width, 'RLE overflow')
-							read(row_bmp.data + i, k)
-							--read the word-align padding
-							local k2 = bit.band(k + 1, bit.bnot(1)) - k
-							if k2 > 0 then
-								read(nil, k2)
-							end
+							read_pixels(i, k)
 							i = i + k
 						end
 					else --repeat: n = number of pixels to repeat, k = color
 						assert(i + n <= width, 'RLE overflow')
-						ffi.fill(row_bmp.data + i, n, k)
+						fill_pixels(i, n, k)
 						i = i + n
 					end
 				end
@@ -462,7 +496,6 @@ function M.save(bmp, write)
 	for j=bmp.h-1,0,-1 do
 		local src_row_bmp = bitmap.sub(bmp, 0, j, bmp.w, 1)
 		bitmap.paint(src_row_bmp, row_bmp)
-		--ffi.fill(row_bmp.data, row_bmp.stride, j)
 		write(row_bmp.data, row_bmp.stride)
 	end
 end

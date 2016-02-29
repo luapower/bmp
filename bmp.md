@@ -23,12 +23,15 @@ and saving in bgra8 format.
 
 ### `bmp.open(read) -> b|nil,err`
 
-Open a bmp file using a `read(buf, bufsize) -> readsize` function
-to get the bytes.
+Open a bmp file using a `read(buf, size)` function to get the bytes.
+The read function should accept any size >= 0 and it should raise an error
+if it can't read all the bytes.
 
 ### `bmp.save(bmp, write) -> true | nil, err`
 
 Save bmp file using a `write(buf, size)` function to write the bytes.
+The write function should accept any size >= 0 and it should raise an error
+if it can't write all the bytes.
 
 
 ## Low-level API

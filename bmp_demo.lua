@@ -29,11 +29,8 @@ function win:repaint()
 			else
 				--save a copy of the bitmap so we test the saving API too
 				local f1 = io.open(fname:gsub('%.bmp', '-saved.bmp'), 'w')
-				local function write(buf, sz)
-					assert(stdio.write(f1, buf, sz))
-				end
 				local bmp_cut = bitmap.sub(wbmp, x, y, bmp.w, bmp.h)
-				bmp_format.save(bmp_cut, write)
+				bmp_format.save(bmp_cut, stdio.writer(f1))
 				f1:close()
 
 				x = x + bmp.w + 10

@@ -109,7 +109,7 @@ M.open = glue.protect(function(read_bytes)
 	local bytes_read = 0
 	local function read(buf, sz)
 		local sz = sz or ffi.sizeof(buf)
-		assert(read_bytes(buf, sz) == sz, 'short read')
+		read_bytes(buf, sz)
 		bytes_read = bytes_read + sz
 		return buf
 	end
@@ -509,15 +509,15 @@ M.save = glue.protect(function(bmp, write)
 	h.bpp = 32
 	h.compression = 3 --bitfields so we can have alpha
 	h.image_size = image_size
-	assert(write(fh, ffi.sizeof(fh)))
-	assert(write(h, ffi.sizeof(h)))
-	assert(write(masks, #masks))
+	write(fh, ffi.sizeof(fh))
+	write(h, ffi.sizeof(h))
+	write(masks, #masks)
 	--save progressively line-by-line using a 1-row bitmap
 	local row_bmp = bitmap.new(bmp.w, 1, 'bgra8')
 	for j=bmp.h-1,0,-1 do
 		local src_row_bmp = bitmap.sub(bmp, 0, j, bmp.w, 1)
 		bitmap.paint(src_row_bmp, row_bmp)
-		assert(write(row_bmp.data, row_bmp.stride))
+		write(row_bmp.data, row_bmp.stride)
 	end
 end)
 

@@ -17,7 +17,7 @@ and saving in bgra8 format.
 `b.w`                                   width
 `b.h`                                   height
 `b.bpp`                                 bits per pixel
-`b:load(dst_bmp[, x, y]) -> ok|nil,err` load the pixels into a [bitmap]
+`b:load(dst_bmp[, x, y]) -> b|nil,err`  load the pixels into a [bitmap]
 `bmp.save(bmp, write) -> ok|nil,err`    save a [bitmap] using a write function
 --------------------------------------- ---------------------------------------
 

@@ -7,7 +7,8 @@ tagline: BMP file loading and saving
 BMP file loading and saving module. Supports all file header versions,
 color depths and pixel formats and encodings except very rare ones
 (embedded JPEGs, embedded PNGs, OS/2 headers, RLE deltas). Supports
-progressive loading, coroutine-based readers, and saving in bgra8 format.
+progressive loading, yielding from the reader and writer functions
+and saving in bgra8 format.
 
 ## API
 

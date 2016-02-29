@@ -103,13 +103,13 @@ local valid_bpps = {
 	png = glue.index{0},
 }
 
-function M.open(read_bytes)
+M.open = glue.protect(function(read_bytes)
 
 	--wrap the reader so we can count the bytes read
 	local bytes_read = 0
 	local function read(buf, sz)
 		local sz = sz or ffi.sizeof(buf)
-		read_bytes(buf, sz)
+		assert(read_bytes(buf, sz) == sz, 'short read')
 		bytes_read = bytes_read + sz
 		return buf
 	end
@@ -210,7 +210,7 @@ function M.open(read_bytes)
 	end
 
 	--make a progressive row-by-row pixel loader
-	local function load(dst_bmp, dst_x, dst_y)
+	local function load_rows(dst_bmp, dst_x, dst_y)
 
 		if comp == 'jpeg' then
 			error'jpeg not supported'
@@ -467,21 +467,27 @@ function M.open(read_bytes)
 	--palette
 	bmp.pal_count = pal_count
 	function bmp:load_pal()
-		load_pal()
-		self.pal = pal
+		local ok, err = pcall(load_pal)
+		if ok then
+			self.pal = pal
+			return true
+		else
+			return nil, err
+		end
 	end
 	function bmp:pal_entry(i)
 		return pal_entry(i)
 	end
 	--loading
+	local load_rows = glue.protect(load_rows)
 	function bmp:load(...)
-		load(...)
+		return load_rows(...)
 	end
 
 	return bmp
-end
+end)
 
-function M.save(bmp, write)
+M.save = glue.protect(function(bmp, write)
 	local fh = file_header()
 	local h = info_header()
 	local image_size = h.w * h.h * 4
@@ -510,7 +516,7 @@ function M.save(bmp, write)
 		bitmap.paint(src_row_bmp, row_bmp)
 		write(row_bmp.data, row_bmp.stride)
 	end
-end
+end)
 
 
 return M

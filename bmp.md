@@ -12,16 +12,16 @@ and saving in bgra8 format.
 
 ## API
 
------------------------------------------------------- ------------------------------------------------------
-`bmp.open(read) -> b|nil,err`                          open a BMP file and read it's header
-`b.w`                                                  width
-`b.h`                                                  height
-`b.bpp`                                                bits per pixel
-`b:load(bmp[, x, y]) -> bmp|nil,err`                   load/paint the pixels into a given [bitmap]
-`b:load(fmt[, alloc) -> bmp|nil,err`                   load the pixels into a new bitmap
-`b:rows(bmp | fmt[, alloc]) -> iter() -> row_num, bmp` iterate the rows over a 1-row bitmap
-`bmp.save(bmp, write) -> ok|nil,err`                   save a bitmap using a write function
------------------------------------------------------- ------------------------------------------------------
+---------------------------------------------------------- ----------------------------------------------------------
+`bmp.open(read) -> b|nil,err`                              open a BMP file and read it's header
+`b.w`                                                      width
+`b.h`                                                      height
+`b.bpp`                                                    bits per pixel
+`b:load(bmp[, x, y]) -> bmp|nil,err`                       load/paint the pixels into a given [bitmap]
+`b:load(format[, alloc]) -> bmp|nil,err`                   load the pixels into a new bitmap
+`b:rows(bmp | format[, alloc]) -> iter() -> row_num, bmp`  iterate the rows over a 1-row bitmap
+`bmp.save(bmp, write) -> ok|nil,err`                       save a bitmap using a write function
+---------------------------------------------------------- ----------------------------------------------------------
 
 ### `bmp.open(read) -> b|nil,err`
 

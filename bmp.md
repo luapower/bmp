@@ -25,7 +25,7 @@ and saving in bgra8 format.
 
 ### `bmp.open(read) -> b|nil,err`
 
-Open a BMP file. The read function has the form `read(buf, size) -> readsize`,
+Open a BMP file. The read function has the form `read(buf, len) -> readlen`,
 it can yield and it can signal I/O errors by returning `nil, err`. It will
 only be asked to read a positive number of bytes and it can return less bytes
 than asked, including zero which signals EOF.
